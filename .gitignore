@@ -41,7 +41,7 @@ app-example
 # generated native folders
 /ios
 /android
-node_modules
+
 # VS Code (팀원 간 개인 설정 충돌 방지)
 .vscode/
 _vscode/

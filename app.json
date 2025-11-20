@@ -1,16 +1,15 @@
 {
   "expo": {
-    "name": "expo-project",
-    "slug": "expo-project",
+    "name": "my-app",
+    "slug": "my-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "expo-project",
+    "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.sjw040108.expoproject"
+      "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
@@ -20,8 +19,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false,
-      "package": "com.sjw040108.expoproject"
+      "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "static",
@@ -45,19 +43,6 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    },
-    "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "5e3f3e62-d290-49ef-87db-3b27613ef034"
-      }
-    },
-    "owner": "sjw040108",
-    "updates": {
-      "url": "https://u.expo.dev/5e3f3e62-d290-49ef-87db-3b27613ef034"
-    },
-    "runtimeVersion": {
-      "policy": "appVersion"
     }
   }
 }
