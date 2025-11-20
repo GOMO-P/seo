@@ -1,0 +1,60 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+app-example
+
+# generated native folders
+/ios
+/android
+node_modules
+# VS Code (팀원 간 개인 설정 충돌 방지)
+.vscode/
+_vscode/
+*.code-workspace
+
+# Windows (윈도우 탐색기 임시 파일)
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# 환경 변수 (보안상 중요! API 키 등)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
