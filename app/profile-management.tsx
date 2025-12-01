@@ -23,6 +23,8 @@ export default function ProfileManagementScreen() {
   const {user} = useAuthContext();
 
   const [bio, setBio] = useState('');
+  const [followersCount, setFollowersCount] = useState(0);
+  const [followingCount, setFollowingCount] = useState(0);
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -35,8 +37,10 @@ export default function ProfileManagementScreen() {
   const loadUserProfile = async () => {
     if (!user?.uid) return;
     const profile = await userService.getUserProfile(user.uid);
-    if (profile?.bio) {
-      setBio(profile.bio);
+    if (profile) {
+      setBio(profile.bio || '');
+      setFollowersCount(profile.followersCount || 0);
+      setFollowingCount(profile.followingCount || 0);
     }
   };
 
@@ -65,8 +69,6 @@ export default function ProfileManagementScreen() {
 
   const userName = user?.displayName || 'User';
   const userTag = user?.email?.split('@')[0] || 'user';
-  const followerCount = 199;
-  const followingCount = 0;
 
   return (
     <SafeAreaView style={[styles.container, {backgroundColor}]} edges={['top']}>
@@ -99,11 +101,11 @@ export default function ProfileManagementScreen() {
         {/* Stats */}
         <View style={styles.statsContainer}>
           <View style={styles.statItem}>
-            <Text style={[styles.statLabel, {color: textColor}]}>팔로우</Text>
-            <Text style={[styles.statValue, {color: secondaryTextColor}]}>{followerCount}</Text>
+            <Text style={[styles.statLabel, {color: textColor}]}>팔로워</Text>
+            <Text style={[styles.statValue, {color: secondaryTextColor}]}>{followersCount}</Text>
           </View>
           <View style={styles.statItem}>
-            <Text style={[styles.statLabel, {color: textColor}]}>팔로워</Text>
+            <Text style={[styles.statLabel, {color: textColor}]}>팔로잉</Text>
             <Text style={[styles.statValue, {color: secondaryTextColor}]}>{followingCount}</Text>
           </View>
         </View>

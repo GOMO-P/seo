@@ -1,4 +1,4 @@
-import {doc, getDoc, setDoc, updateDoc, deleteDoc} from 'firebase/firestore';
+import {doc, getDoc, setDoc, updateDoc, deleteDoc, writeBatch, increment} from 'firebase/firestore';
 import {db} from '../config/firebase';
 
 export interface UserProfile {
@@ -7,6 +7,8 @@ export interface UserProfile {
   displayName?: string;
   bio?: string;
   photoURL?: string;
+  followersCount?: number;
+  followingCount?: number;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -54,6 +56,8 @@ export const userService = {
           uid,
           createdAt: new Date(),
           updatedAt: new Date(),
+          followersCount: 0,
+          followingCount: 0,
         });
       }
     } catch (error) {
@@ -70,6 +74,92 @@ export const userService = {
     } catch (error) {
       console.error('Error deleting user profile:', error);
       throw error;
+    }
+  },
+
+  // Follow a user
+  async followUser(currentUserId: string, targetUserId: string): Promise<void> {
+    if (currentUserId === targetUserId) return;
+
+    try {
+      const batch = writeBatch(db);
+
+      // 1. Add to target user's followers subcollection
+      const followerRef = doc(db, USERS_COLLECTION, targetUserId, 'followers', currentUserId);
+      batch.set(followerRef, {
+        uid: currentUserId,
+        createdAt: new Date(),
+      });
+
+      // 2. Add to current user's following subcollection
+      const followingRef = doc(db, USERS_COLLECTION, currentUserId, 'following', targetUserId);
+      batch.set(followingRef, {
+        uid: targetUserId,
+        createdAt: new Date(),
+      });
+
+      // 3. Increment followers count on target user
+      const targetUserRef = doc(db, USERS_COLLECTION, targetUserId);
+      batch.update(targetUserRef, {
+        followersCount: increment(1),
+      });
+
+      // 4. Increment following count on current user
+      const currentUserRef = doc(db, USERS_COLLECTION, currentUserId);
+      batch.update(currentUserRef, {
+        followingCount: increment(1),
+      });
+
+      await batch.commit();
+    } catch (error) {
+      console.error('Error following user:', error);
+      throw error;
+    }
+  },
+
+  // Unfollow a user
+  async unfollowUser(currentUserId: string, targetUserId: string): Promise<void> {
+    if (currentUserId === targetUserId) return;
+
+    try {
+      const batch = writeBatch(db);
+
+      // 1. Remove from target user's followers subcollection
+      const followerRef = doc(db, USERS_COLLECTION, targetUserId, 'followers', currentUserId);
+      batch.delete(followerRef);
+
+      // 2. Remove from current user's following subcollection
+      const followingRef = doc(db, USERS_COLLECTION, currentUserId, 'following', targetUserId);
+      batch.delete(followingRef);
+
+      // 3. Decrement followers count on target user
+      const targetUserRef = doc(db, USERS_COLLECTION, targetUserId);
+      batch.update(targetUserRef, {
+        followersCount: increment(-1),
+      });
+
+      // 4. Decrement following count on current user
+      const currentUserRef = doc(db, USERS_COLLECTION, currentUserId);
+      batch.update(currentUserRef, {
+        followingCount: increment(-1),
+      });
+
+      await batch.commit();
+    } catch (error) {
+      console.error('Error unfollowing user:', error);
+      throw error;
+    }
+  },
+
+  // Check if following
+  async isFollowing(currentUserId: string, targetUserId: string): Promise<boolean> {
+    try {
+      const docRef = doc(db, USERS_COLLECTION, currentUserId, 'following', targetUserId);
+      const docSnap = await getDoc(docRef);
+      return docSnap.exists();
+    } catch (error) {
+      console.error('Error checking isFollowing:', error);
+      return false;
     }
   },
 };
