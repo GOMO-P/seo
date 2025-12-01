@@ -39,6 +39,7 @@ import {
   arrayUnion,
   arrayRemove,
   increment,
+  writeBatch,
 } from 'firebase/firestore';
 
 interface Message {
@@ -226,6 +227,7 @@ export default function ChatDetailScreen() {
   };
 
   // 5. [수정됨] 채팅방 나가기 (웹 호환성 추가)
+  // 5. [수정됨] 채팅방 나가기 (하위 컬렉션 삭제 로직 포함)
   const performLeaveChat = async () => {
     if (!roomId || !user) return;
     try {
@@ -242,15 +244,36 @@ export default function ChatDetailScreen() {
       const currentParticipants = roomData.participants || [];
       const updatedParticipants = currentParticipants.filter((uid: string) => uid !== user.uid);
 
-      // 남은 사람이 1명 이하면 방 폭파
+      // 남은 사람이 1명 이하면 방 폭파 (나가는 순간 남은 사람이 0명이 됨으로 간주하거나, 로직에 따라 < 2 사용)
       if (updatedParticipants.length < 2) {
-        // 메시지 컬렉션 삭제 로직은 복잡하므로 여기선 방만 삭제 (실무에선 Cloud Functions 추천)
+        // 🔥 [추가된 로직] 하위 컬렉션(messages) 먼저 삭제
+        console.log('방 삭제 시작: 하위 메시지 삭제 중...');
+
+        const messagesRef = collection(db, 'chats', roomId, 'messages');
+        const messagesSnapshot = await getDocs(messagesRef);
+
+        // Firestore 배치(Batch)를 사용하여 한 번에 삭제 (네트워크 비용 절약)
+        // 주의: 배치는 한 번에 최대 500개까지만 가능합니다. 메시지가 500개가 넘는 경우 반복문으로 배치를 나눠야 하지만,
+        // 일반적인 경우를 위해 간단한 단일 배치로 구현합니다.
+        const batch = writeBatch(db);
+
+        messagesSnapshot.forEach(doc => {
+          batch.delete(doc.ref);
+        });
+
+        // 메시지 일괄 삭제 실행
+        await batch.commit();
+
+        // 🔥 하위 메시지 삭제 완료 후, 방 문서 삭제
         await deleteDoc(roomRef);
+        console.log('방 삭제 완료');
       } else {
+        // 방을 유지하고 참여자 목록만 업데이트
         await updateDoc(roomRef, {participants: updatedParticipants});
       }
 
       setSettingsVisible(false);
+      // 목록 화면으로 이동
       router.replace('/(tabs)/chat');
     } catch (e) {
       console.error('Error leaving chat:', e);
