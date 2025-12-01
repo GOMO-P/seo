@@ -7,7 +7,9 @@ import {
   updateProfile,
   deleteUser,
 } from 'firebase/auth';
-import {auth} from '@/config/firebase';
+// 🔥 DB 관련 모듈 추가
+import {doc, setDoc, serverTimestamp} from 'firebase/firestore';
+import {auth, db} from '@/config/firebase'; // db 추가
 
 interface SignUpData {
   email: string;
@@ -29,22 +31,32 @@ export default function useAuth() {
     setError(null);
 
     try {
+      // 1. 인증(Authentication) 계정 생성
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Update user profile with name if provided
+      // 2. 프로필 이름 업데이트
       if (name) {
         await updateProfile(user, {displayName: name});
       }
+
+      // 3. 🔥 [추가됨] Firestore 'users' 컬렉션에 내 정보 저장
+      // 이 부분이 있어야 나중에 친구 찾기가 가능합니다!
+      await setDoc(doc(db, 'users', user.uid), {
+        uid: user.uid,
+        email: user.email,
+        name: name || '이름 없음',
+        photoURL: user.photoURL || null,
+        createdAt: serverTimestamp(),
+      });
 
       setLoading(false);
       return user;
     } catch (err: any) {
       setLoading(false);
 
-      // Handle Firebase auth errors
+      // 에러 처리
       let errorMessage = 'An error occurred during sign up';
-
       switch (err.code) {
         case 'auth/email-already-in-use':
           errorMessage = 'This email is already registered';
@@ -79,10 +91,10 @@ export default function useAuth() {
       setLoading(false);
 
       let errorMessage = 'An error occurred during sign in';
-
       switch (err.code) {
         case 'auth/user-not-found':
         case 'auth/wrong-password':
+        case 'auth/invalid-credential': // 최신 파이어베이스 에러 코드 대응
           errorMessage = 'Invalid email or password';
           break;
         case 'auth/invalid-email':
@@ -130,14 +142,13 @@ export default function useAuth() {
       if (auth.currentUser) {
         await deleteUser(auth.currentUser);
         setLoading(false);
-        return null; // Success
+        return null;
       }
       return 'No user logged in';
     } catch (err: any) {
       setLoading(false);
 
       let errorMessage = 'An error occurred during account deletion';
-
       if (err.code === 'auth/requires-recent-login') {
         errorMessage = 'Please log in again to delete your account';
       } else {
@@ -145,7 +156,7 @@ export default function useAuth() {
       }
 
       setError(errorMessage);
-      return errorMessage; // Return error message
+      return errorMessage;
     }
   };
 

@@ -24,6 +24,7 @@ const MAPPING = {
   gear: 'settings',
   plus: 'add',
   'arrow.up': 'arrow-upward',
+  xmark: 'close', // 또는 'clear'
 } as IconMapping;
 
 /**

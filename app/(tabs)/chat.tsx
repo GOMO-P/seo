@@ -16,18 +16,34 @@ import {
 import {IconSymbol} from '@/components/ui/icon-symbol';
 import {useRouter} from 'expo-router';
 import {useAuthContext} from '@/contexts/AuthContext';
+import * as Notifications from 'expo-notifications';
 
-// 🔥 Firebase 관련
 import {db} from '@/config/firebase';
-import {collection, onSnapshot, query, orderBy, addDoc, serverTimestamp} from 'firebase/firestore';
+import {
+  collection,
+  onSnapshot,
+  query,
+  orderBy,
+  addDoc,
+  serverTimestamp,
+  getDocs,
+  where,
+} from 'firebase/firestore';
 
-// 데이터 타입 정의
 interface ChatRoom {
   id: string;
   name: string;
   lastMessage: string;
   lastMessageAt: any;
   avatarBgColor: string;
+  unreadCounts?: {[key: string]: number};
+  participants?: string[];
+}
+
+interface UserData {
+  uid: string;
+  name: string;
+  email: string;
 }
 
 export default function ChatScreen() {
@@ -36,92 +52,175 @@ export default function ChatScreen() {
 
   const [chatList, setChatList] = useState<ChatRoom[]>([]);
   const [loading, setLoading] = useState(true);
-
-  // 모달(팝업) 관련 상태
   const [modalVisible, setModalVisible] = useState(false);
-  const [newRoomName, setNewRoomName] = useState('');
-  const [creating, setCreating] = useState(false);
+  const [users, setUsers] = useState<UserData[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
 
-  // 1. [읽기] 채팅방 목록 실시간 구독
+  const [userMap, setUserMap] = useState<{[key: string]: string}>({});
+
+  // 1. 유저 목록 가져오기
   useEffect(() => {
-    // lastMessageAt(마지막 대화 시간) 기준 내림차순 정렬 (최신 대화가 위로)
+    const unsubscribe = onSnapshot(collection(db, 'users'), snapshot => {
+      const map: {[key: string]: string} = {};
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        map[data.uid] = data.name || '알 수 없음';
+      });
+      setUserMap(map);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. 채팅방 목록 가져오기
+  useEffect(() => {
+    if (!user) return;
+
     const q = query(collection(db, 'chats'), orderBy('lastMessageAt', 'desc'));
 
     const unsubscribe = onSnapshot(q, snapshot => {
-      const rooms: ChatRoom[] = snapshot.docs.map(doc => {
+      const rooms: ChatRoom[] = [];
+
+      snapshot.docs.forEach(doc => {
         const data = doc.data();
-        return {
+        const participants = data.participants || [];
+        const unreadCounts = data.unreadCounts || {};
+
+        // 🔥 [디버깅 로그] 데이터가 제대로 들어오는지 확인
+        console.log(`[${data.name}] 방 데이터 확인:`);
+        console.log(`- 내 UID: ${user.uid}`);
+        console.log(`- unreadCounts 원본:`, JSON.stringify(unreadCounts));
+        console.log(`- 내 안 읽은 개수:`, unreadCounts[user.uid]);
+        console.log('--------------------------------');
+
+        rooms.push({
           id: doc.id,
           name: data.name || '알 수 없는 방',
           lastMessage: data.lastMessage || '대화가 없습니다.',
           lastMessageAt: data.lastMessageAt,
-          avatarBgColor: '#EAF2FF', // 고정 색상 (나중에 랜덤이나 유저별 색상으로 변경 가능)
-        };
+          avatarBgColor: '#EAF2FF',
+          unreadCounts: unreadCounts,
+          participants: participants,
+        });
       });
+
       setChatList(rooms);
       setLoading(false);
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [user]);
 
-  // 2. [쓰기] 새로운 채팅방 생성 함수
-  const handleCreateRoom = async () => {
-    if (!newRoomName.trim()) {
-      Alert.alert('알림', '방 이름을 입력해주세요.');
-      return;
-    }
-    if (!user) {
-      Alert.alert('오류', '로그인이 필요합니다.');
-      return;
-    }
+  // (알림 함수 생략)
+  async function schedulePushNotification(title: string, body: string) {
+    await Notifications.scheduleNotificationAsync({
+      content: {title, body, sound: true},
+      trigger: null,
+    });
+  }
 
+  // (유저 검색 함수 생략)
+  const fetchUsers = async () => {
+    if (!user) return;
+    setLoadingUsers(true);
     try {
-      setCreating(true);
-      // chats 컬렉션에 새 문서 추가
-      const docRef = await addDoc(collection(db, 'chats'), {
-        name: newRoomName,
-        createdBy: user.uid,
-        createdAt: serverTimestamp(),
-        lastMessage: '새 채팅방이 생성되었습니다.',
-        lastMessageAt: serverTimestamp(),
-      });
-
-      // 모달 닫기 및 초기화
-      setModalVisible(false);
-      setNewRoomName('');
-
-      // 생성된 방으로 바로 이동
-      router.push({
-        pathname: '/chat/[id]',
-        params: {id: docRef.id, name: newRoomName},
-      });
+      const q = query(collection(db, 'users'), where('uid', '!=', user.uid));
+      const querySnapshot = await getDocs(q);
+      const userList: UserData[] = [];
+      querySnapshot.forEach(doc => userList.push(doc.data() as UserData));
+      setUsers(userList);
     } catch (error) {
-      console.error('Error creating room: ', error);
-      Alert.alert('오류', '채팅방 생성 중 문제가 발생했습니다.');
+      console.error('Error fetching users: ', error);
     } finally {
-      setCreating(false);
+      setLoadingUsers(false);
     }
   };
 
-  const renderItem = ({item}: {item: ChatRoom}) => (
-    <TouchableOpacity
-      style={styles.chatItem}
-      onPress={() =>
-        router.push({
-          pathname: '/chat/[id]',
-          params: {id: item.id, name: item.name},
-        })
-      }>
-      <View style={styles.avatarContainer}>
-        <View style={[styles.avatarHead, {backgroundColor: item.avatarBgColor}]} />
-        <View style={[styles.avatarBody, {backgroundColor: item.avatarBgColor}]} />
+  useEffect(() => {
+    if (modalVisible) fetchUsers();
+  }, [modalVisible]);
+
+  // 채팅방 생성
+  const handleCreateChat = async (selectedUser: UserData) => {
+    if (!user) return;
+    try {
+      setModalVisible(false);
+      const roomName = `${selectedUser.name}`;
+
+      const initialUnreadCounts = {
+        [user.uid]: 0,
+        [selectedUser.uid]: 0,
+      };
+
+      const docRef = await addDoc(collection(db, 'chats'), {
+        name: roomName,
+        createdBy: user.uid,
+        createdAt: serverTimestamp(),
+        participants: [user.uid, selectedUser.uid],
+        lastMessage: '대화를 시작해보세요!',
+        lastMessageAt: serverTimestamp(),
+        unreadCounts: initialUnreadCounts,
+      });
+
+      router.push({pathname: '/chat/[id]', params: {id: docRef.id, name: roomName}});
+    } catch (error) {
+      console.error('Error creating room: ', error);
+      Alert.alert('오류', '채팅방 생성 실패');
+    }
+  };
+
+  // 렌더링
+  const renderChatItem = ({item}: {item: ChatRoom}) => {
+    // 🔥 [핵심] 내 안 읽은 개수 가져오기
+    const myUnreadCount = item.unreadCounts?.[user?.uid || ''] || 0;
+
+    // 상대방 이름 찾기
+    let displayName = item.name;
+    if (item.participants && item.participants.length > 0) {
+      const otherId = item.participants.find(uid => uid !== user?.uid);
+      if (otherId && userMap[otherId]) {
+        displayName = userMap[otherId];
+      }
+    }
+
+    return (
+      <TouchableOpacity
+        style={styles.chatItem}
+        onPress={() =>
+          router.push({pathname: '/chat/[id]', params: {id: item.id, name: displayName}})
+        }>
+        <View style={styles.avatarContainer}>
+          <View style={[styles.avatarHead, {backgroundColor: item.avatarBgColor}]} />
+          <View style={[styles.avatarBody, {backgroundColor: item.avatarBgColor}]} />
+        </View>
+
+        <View style={styles.textContainer}>
+          <Text style={styles.nameText}>{displayName}</Text>
+          <Text style={styles.messageText} numberOfLines={1}>
+            {item.lastMessage}
+          </Text>
+        </View>
+
+        {/* 배지 표시 조건: 0보다 클 때만 */}
+        <View style={styles.rightContainer}>
+          {myUnreadCount > 0 && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{myUnreadCount}</Text>
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderUserItem = ({item}: {item: UserData}) => (
+    <TouchableOpacity style={styles.userItem} onPress={() => handleCreateChat(item)}>
+      <View style={[styles.avatarContainer, {width: 36, height: 36, marginRight: 12}]}>
+        <View style={[styles.avatarHead, {backgroundColor: '#E0E0E0'}]} />
+        <View style={[styles.avatarBody, {backgroundColor: '#E0E0E0'}]} />
       </View>
-      <View style={styles.textContainer}>
-        <Text style={styles.nameText}>{item.name}</Text>
-        <Text style={styles.messageText} numberOfLines={1}>
-          {item.lastMessage}
-        </Text>
+      <View>
+        <Text style={styles.userName}>{item.name}</Text>
+        <Text style={styles.userEmail}>{item.email}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -129,24 +228,18 @@ export default function ChatScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.statusBarPlaceholder} />
-
-      {/* 헤더 */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.headerLeftButton}>
           <Text style={styles.headerButtonText}>수정</Text>
         </TouchableOpacity>
-
         <View style={styles.headerTitleWrapper}>
           <Text style={styles.headerTitle}>채팅 목록</Text>
         </View>
-
-        {/* 채팅방 추가 버튼 (+ 아이콘) */}
         <TouchableOpacity style={styles.headerRightButton} onPress={() => setModalVisible(true)}>
           <IconSymbol name="plus" size={24} color="#006FFD" />
         </TouchableOpacity>
       </View>
 
-      {/* 검색창 */}
       <View style={styles.searchContainer}>
         <View style={styles.searchBar}>
           <IconSymbol name="magnifyingglass" size={18} color="#8F9098" style={{marginRight: 8}} />
@@ -158,7 +251,6 @@ export default function ChatScreen() {
         </View>
       </View>
 
-      {/* 채팅 리스트 */}
       {loading ? (
         <View style={{flex: 1, justifyContent: 'center'}}>
           <ActivityIndicator size="large" color="#006FFD" />
@@ -166,7 +258,7 @@ export default function ChatScreen() {
       ) : (
         <FlatList
           data={chatList}
-          renderItem={renderItem}
+          renderItem={renderChatItem}
           keyExtractor={item => item.id}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={
@@ -178,43 +270,37 @@ export default function ChatScreen() {
         />
       )}
 
-      {/* 🆕 채팅방 생성 모달 (팝업) */}
       <Modal
-        animationType="fade"
+        animationType="slide"
         transparent={true}
         visible={modalVisible}
         onRequestClose={() => setModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>새 채팅방 만들기</Text>
-            <Text style={styles.modalSubtitle}>채팅방의 이름을 입력해주세요.</Text>
-
-            <TextInput
-              style={styles.modalInput}
-              placeholder="예: 맛집 탐방대"
-              value={newRoomName}
-              onChangeText={setNewRoomName}
-              autoFocus={true}
-            />
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setModalVisible(false)}>
-                <Text style={styles.cancelButtonText}>취소</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.modalButton, styles.createButton]}
-                onPress={handleCreateRoom}
-                disabled={creating}>
-                {creating ? (
-                  <ActivityIndicator color="white" size="small" />
-                ) : (
-                  <Text style={styles.createButtonText}>만들기</Text>
-                )}
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>대화 상대를 선택하세요</Text>
+              <TouchableOpacity onPress={() => setModalVisible(false)}>
+                <IconSymbol name="xmark" size={20} color="#71727A" />
               </TouchableOpacity>
             </View>
+            {loadingUsers ? (
+              <ActivityIndicator size="large" color="#006FFD" style={{marginVertical: 20}} />
+            ) : (
+              <FlatList
+                data={users}
+                renderItem={renderUserItem}
+                keyExtractor={item => item.uid}
+                contentContainerStyle={{paddingBottom: 16}}
+                ListEmptyComponent={
+                  <Text style={{textAlign: 'center', color: '#8F9098', marginTop: 20}}>
+                    친구 없음
+                  </Text>
+                }
+              />
+            )}
+            <TouchableOpacity style={styles.closeButton} onPress={() => setModalVisible(false)}>
+              <Text style={styles.closeButtonText}>취소</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -296,49 +382,41 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
   },
   badgeText: {color: 'white', fontSize: 10, fontWeight: '700'},
-
-  // --- 모달 스타일 ---
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
-    alignItems: 'center',
     padding: 20,
   },
   modalContent: {
-    width: '100%',
-    maxWidth: 320,
     backgroundColor: 'white',
     borderRadius: 20,
-    padding: 24,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  modalTitle: {fontSize: 18, fontWeight: '700', color: '#1F2024', marginBottom: 8},
-  modalSubtitle: {fontSize: 14, color: '#71727A', marginBottom: 20},
-  modalInput: {
+    padding: 20,
+    maxHeight: '60%',
     width: '100%',
-    height: 48,
-    backgroundColor: '#F8F9FE',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    fontSize: 16,
-    marginBottom: 24,
   },
-  modalButtons: {flexDirection: 'row', gap: 12, width: '100%'},
-  modalButton: {
-    flex: 1,
-    height: 44,
-    borderRadius: 12,
-    justifyContent: 'center',
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 16,
   },
-  cancelButton: {backgroundColor: '#F0F0F0'},
-  cancelButtonText: {color: '#1F2024', fontWeight: '600'},
-  createButton: {backgroundColor: '#006FFD'},
-  createButtonText: {color: 'white', fontWeight: '600'},
+  modalTitle: {fontSize: 18, fontWeight: '700', color: '#1F2024'},
+  userItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#F0F0F0',
+  },
+  userName: {fontSize: 16, fontWeight: '600', color: '#1F2024'},
+  userEmail: {fontSize: 12, color: '#71727A'},
+  closeButton: {
+    marginTop: 16,
+    padding: 12,
+    alignItems: 'center',
+    backgroundColor: '#F0F0F0',
+    borderRadius: 12,
+  },
+  closeButtonText: {fontSize: 14, fontWeight: '600', color: '#1F2024'},
 });
