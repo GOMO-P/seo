@@ -48,7 +48,8 @@ interface UserData {
 
 export default function ChatScreen() {
   const router = useRouter();
-  const {user} = useAuthContext();
+  // useAuthContext에서 loading 상태도 가져옵니다.
+  const {user, loading: authLoading} = useAuthContext();
 
   const [chatList, setChatList] = useState<ChatRoom[]>([]);
   const [loading, setLoading] = useState(true);
@@ -58,7 +59,7 @@ export default function ChatScreen() {
 
   const [userMap, setUserMap] = useState<{[key: string]: string}>({});
 
-  // 1. 유저 목록 가져오기
+  // 1. 유저 목록 가져오기 (이름 매칭용) - 한 번만 실행
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'users'), snapshot => {
       const map: {[key: string]: string} = {};
@@ -73,44 +74,52 @@ export default function ChatScreen() {
 
   // 2. 채팅방 목록 가져오기
   useEffect(() => {
-    if (!user) return;
+    // 유저 정보가 없거나 로딩 중이면 구독하지 않음
+    if (authLoading || !user) {
+      setLoading(false); // 무한 로딩 방지
+      return;
+    }
+
+    setLoading(true); // 구독 시작 시 로딩
 
     const q = query(collection(db, 'chats'), orderBy('lastMessageAt', 'desc'));
 
-    const unsubscribe = onSnapshot(q, snapshot => {
-      const rooms: ChatRoom[] = [];
+    const unsubscribe = onSnapshot(
+      q,
+      snapshot => {
+        const rooms: ChatRoom[] = [];
 
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        const participants = data.participants || [];
-        const unreadCounts = data.unreadCounts || {};
+        snapshot.docs.forEach(doc => {
+          const data = doc.data();
+          const participants = data.participants || [];
 
-        // 🔥 [디버깅 로그] 데이터가 제대로 들어오는지 확인
-        console.log(`[${data.name}] 방 데이터 확인:`);
-        console.log(`- 내 UID: ${user.uid}`);
-        console.log(`- unreadCounts 원본:`, JSON.stringify(unreadCounts));
-        console.log(`- 내 안 읽은 개수:`, unreadCounts[user.uid]);
-        console.log('--------------------------------');
-
-        rooms.push({
-          id: doc.id,
-          name: data.name || '알 수 없는 방',
-          lastMessage: data.lastMessage || '대화가 없습니다.',
-          lastMessageAt: data.lastMessageAt,
-          avatarBgColor: '#EAF2FF',
-          unreadCounts: unreadCounts,
-          participants: participants,
+          // 내가 포함된 방만 필터링 (JS단 처리)
+          if (participants.includes(user.uid)) {
+            rooms.push({
+              id: doc.id,
+              name: data.name || '알 수 없는 방',
+              lastMessage: data.lastMessage || '대화가 없습니다.',
+              lastMessageAt: data.lastMessageAt,
+              avatarBgColor: '#EAF2FF',
+              unreadCounts: data.unreadCounts || {},
+              participants: participants,
+            });
+          }
         });
-      });
 
-      setChatList(rooms);
-      setLoading(false);
-    });
+        setChatList(rooms);
+        setLoading(false);
+      },
+      error => {
+        console.error('채팅 목록 구독 에러:', error);
+        setLoading(false); // 에러 나도 로딩 끄기
+      },
+    );
 
     return () => unsubscribe();
-  }, [user]);
+  }, [user, authLoading]); // 의존성 확실하게
 
-  // (알림 함수 생략)
+  // (알림 함수 생략 - 동일)
   async function schedulePushNotification(title: string, body: string) {
     await Notifications.scheduleNotificationAsync({
       content: {title, body, sound: true},
@@ -118,7 +127,7 @@ export default function ChatScreen() {
     });
   }
 
-  // (유저 검색 함수 생략)
+  // 친구 목록 불러오기
   const fetchUsers = async () => {
     if (!user) return;
     setLoadingUsers(true);
@@ -135,11 +144,14 @@ export default function ChatScreen() {
     }
   };
 
+  // 모달 열릴 때만 호출
   useEffect(() => {
-    if (modalVisible) fetchUsers();
-  }, [modalVisible]);
+    if (modalVisible && user) {
+      fetchUsers();
+    }
+  }, [modalVisible, user]);
 
-  // 채팅방 생성
+  // 채팅방 생성 (동일)
   const handleCreateChat = async (selectedUser: UserData) => {
     if (!user) return;
     try {
@@ -170,10 +182,8 @@ export default function ChatScreen() {
 
   // 렌더링
   const renderChatItem = ({item}: {item: ChatRoom}) => {
-    // 🔥 [핵심] 내 안 읽은 개수 가져오기
     const myUnreadCount = item.unreadCounts?.[user?.uid || ''] || 0;
 
-    // 상대방 이름 찾기
     let displayName = item.name;
     if (item.participants && item.participants.length > 0) {
       const otherId = item.participants.find(uid => uid !== user?.uid);
@@ -200,7 +210,6 @@ export default function ChatScreen() {
           </Text>
         </View>
 
-        {/* 배지 표시 조건: 0보다 클 때만 */}
         <View style={styles.rightContainer}>
           {myUnreadCount > 0 && (
             <View style={styles.badge}>
@@ -224,6 +233,15 @@ export default function ChatScreen() {
       </View>
     </TouchableOpacity>
   );
+
+  // 로딩 화면 처리
+  if (authLoading) {
+    return (
+      <View style={[styles.container, styles.center]}>
+        <ActivityIndicator size="large" color="#006FFD" />
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -309,6 +327,7 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
+  center: {flex: 1, justifyContent: 'center', alignItems: 'center'},
   container: {flex: 1, backgroundColor: 'white'},
   statusBarPlaceholder: {
     height: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
