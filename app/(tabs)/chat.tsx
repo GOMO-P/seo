@@ -75,7 +75,12 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!user) return;
 
-    const q = query(collection(db, 'chats'), orderBy('lastMessageAt', 'desc'));
+    // 🔥 [수정됨] 내가 포함된 채팅방만 가져오기 (participants 배열에 내 uid가 있는 경우)
+    const q = query(
+      collection(db, 'chats'),
+      where('participants', 'array-contains', user.uid),
+      orderBy('lastMessageAt', 'desc'),
+    );
 
     const unsubscribe = onSnapshot(q, snapshot => {
       const rooms: ChatRoom[] = [];
@@ -84,13 +89,6 @@ export default function ChatScreen() {
         const data = doc.data();
         const participants = data.participants || [];
         const unreadCounts = data.unreadCounts || {};
-
-        // 🔥 [디버깅 로그] 데이터가 제대로 들어오는지 확인
-        console.log(`[${data.name}] 방 데이터 확인:`);
-        console.log(`- 내 UID: ${user.uid}`);
-        console.log(`- unreadCounts 원본:`, JSON.stringify(unreadCounts));
-        console.log(`- 내 안 읽은 개수:`, unreadCounts[user.uid]);
-        console.log('--------------------------------');
 
         rooms.push({
           id: doc.id,
@@ -144,8 +142,39 @@ export default function ChatScreen() {
     if (!user) return;
     try {
       setModalVisible(false);
-      const roomName = `${selectedUser.name}`;
 
+      // 🔥 [수정됨] 이미 존재하는 채팅방인지 확인
+      // 1. 내가 참여한 모든 방을 가져옴 (쿼리 제약상 'participants' array-contains와 다른 필드 동시 필터링이 까다로울 수 있음)
+      //    따라서 일단 내 방을 가져와서 JS단에서 상대방이 있는지 확인하는 방식이 가장 확실하고 간단함.
+      const q = query(collection(db, 'chats'), where('participants', 'array-contains', user.uid));
+      const querySnapshot = await getDocs(q);
+
+      let existingRoomId = null;
+      let existingRoomName = '';
+
+      // 2. 상대방(selectedUser.uid)도 포함된 방이 있는지 찾기
+      for (const doc of querySnapshot.docs) {
+        const data = doc.data();
+        const participants = data.participants || [];
+        if (participants.includes(selectedUser.uid)) {
+          existingRoomId = doc.id;
+          existingRoomName = data.name;
+          break; // 찾았으면 중단
+        }
+      }
+
+      // 3. 이미 존재하면 해당 방으로 이동
+      if (existingRoomId) {
+        console.log('이미 존재하는 방으로 이동:', existingRoomId);
+        router.push({
+          pathname: '/chat/[id]',
+          params: {id: existingRoomId, name: existingRoomName || selectedUser.name},
+        });
+        return;
+      }
+
+      // 4. 없으면 새로 생성
+      const roomName = `${selectedUser.name}`;
       const initialUnreadCounts = {
         [user.uid]: 0,
         [selectedUser.uid]: 0,

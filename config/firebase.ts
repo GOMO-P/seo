@@ -5,12 +5,13 @@ import {getStorage} from 'firebase/storage';
 
 // Firebase 설정
 const firebaseConfig = {
-  apiKey: 'AIzaSyDYgfGY9Qqvg630nptcn1WNBqhb1GXLezo',
-  authDomain: 'test-1ccad42a.firebaseapp.com',
-  projectId: 'test-1ccad42a',
-  storageBucket: 'test-1ccad42a.firebasestorage.app',
-  messagingSenderId: '753991690407',
-  appId: '1:753991690407:web:baec9d8d9820401e289382',
+  apiKey: 'AIzaSyBvSLcQnOUXb-9htltF-3wz8G6Tr8Y-03w',
+  authDomain: 'gomo-d42fc.firebaseapp.com',
+  projectId: 'gomo-d42fc',
+  storageBucket: 'gomo-d42fc.firebasestorage.app',
+  messagingSenderId: '771029392525',
+  appId: '1:771029392525:web:6ee22f4241fd61d7e096c4',
+  measurementId: 'G-30NW6LKXHZ',
 };
 
 // Firebase 초기화
