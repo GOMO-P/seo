@@ -30,16 +30,15 @@ import {
   serverTimestamp,
   Timestamp,
   doc,
-  setDoc, // 🔥 updateDoc 대신 setDoc 사용 (중요)
+  setDoc,
   deleteDoc,
   getDoc,
-  updateDoc, // 배열 수정용으로 남겨둠
+  updateDoc,
   where,
   getDocs,
   arrayUnion,
   arrayRemove,
   increment,
-  writeBatch,
 } from 'firebase/firestore';
 
 interface Message {
@@ -60,6 +59,9 @@ export default function ChatDetailScreen() {
   const {id, name} = useLocalSearchParams();
   const {user} = useAuthContext();
 
+  const roomId = Array.isArray(id) ? id[0] : id;
+  const initialName = Array.isArray(name) ? name[0] : name;
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
@@ -69,35 +71,17 @@ export default function ChatDetailScreen() {
   const [isNotificationEnabled, setIsNotificationEnabled] = useState(true);
   const [participants, setParticipants] = useState<UserInfo[]>([]);
 
+  // 🔥 [추가] 채팅방 이름 관리 상태
+  const [currentRoomName, setCurrentRoomName] = useState(initialName || '채팅방');
+  const [editableName, setEditableName] = useState(initialName || '');
+
+  // 초대 관련 상태
+  const [inviteModalVisible, setInviteModalVisible] = useState(false);
+  const [allUsers, setAllUsers] = useState<UserInfo[]>([]);
+
   const flatListRef = useRef<FlatList>(null);
-  const roomId = Array.isArray(id) ? id[0] : id;
 
-  // 1. [수정됨] 채팅방 입장 시 '내 안 읽은 메시지 수' 0으로 초기화 (안전하게 setDoc 사용)
-  useEffect(() => {
-    if (!roomId || !user) return;
-
-    const resetUnreadCount = async () => {
-      try {
-        const roomRef = doc(db, 'chats', roomId);
-        // 🔥 setDoc + merge를 사용하면 필드가 없어도 에러 없이 생성해줍니다.
-        await setDoc(
-          roomRef,
-          {
-            unreadCounts: {
-              [user.uid]: 0,
-            },
-          },
-          {merge: true},
-        );
-      } catch (e) {
-        console.error('읽음 처리 실패:', e);
-      }
-    };
-
-    resetUnreadCount();
-  }, [roomId, user]);
-
-  // 2. 메시지 데이터 구독
+  // 1. 메시지 데이터 구독
   useEffect(() => {
     if (!roomId) return;
 
@@ -121,7 +105,7 @@ export default function ChatDetailScreen() {
     return () => unsubscribe();
   }, [roomId]);
 
-  // 3. 방 정보 구독 (참여자 & 알림설정)
+  // 2. 방 정보 구독
   useEffect(() => {
     if (!roomId || !user) return;
 
@@ -130,11 +114,15 @@ export default function ChatDetailScreen() {
       if (docSnap.exists()) {
         const roomData = docSnap.data();
 
-        // 알림 설정 확인
+        // 🔥 [추가] DB에 저장된 최신 방 이름으로 업데이트
+        if (roomData.name) {
+          setCurrentRoomName(roomData.name);
+          setEditableName(roomData.name);
+        }
+
         const mutedList = roomData.mutedBy || [];
         setIsNotificationEnabled(!mutedList.includes(user.uid));
 
-        // 참여자 정보 가져오기
         const participantIds = roomData.participants || [];
         if (participantIds.length > 0) {
           try {
@@ -159,14 +147,57 @@ export default function ChatDetailScreen() {
     return () => unsubscribe();
   }, [roomId, user]);
 
-  // 알림 토글
+  // 3. 전체 유저 목록 불러오기 (초대용)
+  const fetchAllUsers = async () => {
+    try {
+      const usersRef = collection(db, 'users');
+      const querySnapshot = await getDocs(usersRef);
+      const users: UserInfo[] = [];
+      querySnapshot.forEach(doc => {
+        const userData = doc.data() as UserInfo;
+        if (!participants.some(p => p.uid === userData.uid)) {
+          users.push(userData);
+        }
+      });
+      setAllUsers(users);
+    } catch (e) {
+      console.error('유저 목록 로딩 실패:', e);
+    }
+  };
+
+  useEffect(() => {
+    if (inviteModalVisible) fetchAllUsers();
+  }, [inviteModalVisible]);
+
+  // 4. 유저 초대 함수
+  const handleInviteUser = async (targetUser: UserInfo) => {
+    if (!roomId) return;
+    try {
+      const roomRef = doc(db, 'chats', roomId);
+      await updateDoc(roomRef, {
+        participants: arrayUnion(targetUser.uid),
+        [`unreadCounts.${targetUser.uid}`]: 0,
+      });
+      await addDoc(collection(db, 'chats', roomId, 'messages'), {
+        text: `${targetUser.name}님이 초대되었습니다.`,
+        sender: 'system',
+        createdAt: serverTimestamp(),
+      });
+      Alert.alert('성공', `${targetUser.name}님을 초대했습니다.`);
+      setInviteModalVisible(false);
+    } catch (e) {
+      console.error('초대 실패:', e);
+      Alert.alert('오류', '초대에 실패했습니다.');
+    }
+  };
+
+  // 5. 알림 토글
   const toggleNotification = async (value: boolean) => {
     if (!roomId || !user) return;
     setIsNotificationEnabled(value);
     try {
       const roomRef = doc(db, 'chats', roomId);
       if (value) {
-        // 배열 수정은 updateDoc이 편함 (이미 문서가 있으므로)
         await updateDoc(roomRef, {mutedBy: arrayRemove(user.uid)});
       } else {
         await updateDoc(roomRef, {mutedBy: arrayUnion(user.uid)});
@@ -177,22 +208,53 @@ export default function ChatDetailScreen() {
     }
   };
 
-  // 4. [수정됨] 메시지 전송 (setDoc + merge 사용으로 필드 누락 방지)
+  // 6. 🔥 [추가] 채팅방 이름 변경 함수
+  const notify = (title: string, message?: string) => {
+    if (Platform.OS === 'web') {
+      alert(`${title}\n${message ?? ''}`);
+    } else {
+      Alert.alert(title, message);
+    }
+  };
+
+  const handleUpdateRoomName = async () => {
+    if (!roomId || !editableName.trim()) {
+      notify('알림', '방 이름을 입력해주세요.');
+      return;
+    }
+
+    try {
+      const roomRef = doc(db, 'chats', roomId);
+      await updateDoc(roomRef, {
+        name: editableName.trim(),
+      });
+
+      await addDoc(collection(db, 'chats', roomId, 'messages'), {
+        text: `채팅방 이름이 "${editableName.trim()}"(으)로 변경되었습니다.`,
+        sender: 'system',
+        createdAt: serverTimestamp(),
+      });
+
+      notify('성공', '채팅방 이름이 변경되었습니다.');
+    } catch (e) {
+      console.error('이름 변경 실패:', e);
+      notify('오류', '이름 변경에 실패했습니다.');
+    }
+  };
+
+  // 7. 메시지 전송
   const sendMessage = async () => {
     if (!text.trim() || !roomId || !user) return;
-
     const messageToSend = text;
     setText('');
 
     try {
-      // (1) 메시지 저장
       await addDoc(collection(db, 'chats', roomId, 'messages'), {
         text: messageToSend,
         sender: user.displayName || 'Anonymous',
         createdAt: serverTimestamp(),
       });
 
-      // (2) 방 정보 업데이트 준비
       const roomRef = doc(db, 'chats', roomId);
       const roomSnap = await getDoc(roomRef);
 
@@ -200,25 +262,18 @@ export default function ChatDetailScreen() {
         lastMessage: messageToSend,
         lastMessageAt: serverTimestamp(),
         lastMessageSenderId: user.uid,
-        // name 필드 업데이트 제거 (상대방 이름 덮어쓰기 방지)
         unreadCounts: {},
       };
 
       if (roomSnap.exists()) {
         const roomData = roomSnap.data();
         const currentParticipants = roomData.participants || [];
-
-        // 나를 제외한 유저 unreadCounts +1
         currentParticipants.forEach((uid: string) => {
           if (uid !== user.uid) {
-            // 🔥 setDoc merge를 위한 중첩 객체 방식
             updateData.unreadCounts[uid] = increment(1);
           }
         });
       }
-
-      // 🔥 핵심: setDoc({ ... }, { merge: true }) 사용
-      // unreadCounts 필드가 없으면 자동으로 생성해줍니다.
       await setDoc(roomRef, updateData, {merge: true});
     } catch (error) {
       console.error('Error sending message: ', error);
@@ -226,54 +281,27 @@ export default function ChatDetailScreen() {
     }
   };
 
-  // 5. [수정됨] 채팅방 나가기 (웹 호환성 추가)
-  // 5. [수정됨] 채팅방 나가기 (하위 컬렉션 삭제 로직 포함)
+  // 8. 나가기 로직
   const performLeaveChat = async () => {
     if (!roomId || !user) return;
     try {
       const roomRef = doc(db, 'chats', roomId);
       const roomSnap = await getDoc(roomRef);
-
       if (!roomSnap.exists()) {
         setSettingsVisible(false);
         router.back();
         return;
       }
-
       const roomData = roomSnap.data();
       const currentParticipants = roomData.participants || [];
       const updatedParticipants = currentParticipants.filter((uid: string) => uid !== user.uid);
 
-      // 남은 사람이 1명 이하면 방 폭파 (나가는 순간 남은 사람이 0명이 됨으로 간주하거나, 로직에 따라 < 2 사용)
-      if (updatedParticipants.length < 2) {
-        // 🔥 [추가된 로직] 하위 컬렉션(messages) 먼저 삭제
-        console.log('방 삭제 시작: 하위 메시지 삭제 중...');
-
-        const messagesRef = collection(db, 'chats', roomId, 'messages');
-        const messagesSnapshot = await getDocs(messagesRef);
-
-        // Firestore 배치(Batch)를 사용하여 한 번에 삭제 (네트워크 비용 절약)
-        // 주의: 배치는 한 번에 최대 500개까지만 가능합니다. 메시지가 500개가 넘는 경우 반복문으로 배치를 나눠야 하지만,
-        // 일반적인 경우를 위해 간단한 단일 배치로 구현합니다.
-        const batch = writeBatch(db);
-
-        messagesSnapshot.forEach(doc => {
-          batch.delete(doc.ref);
-        });
-
-        // 메시지 일괄 삭제 실행
-        await batch.commit();
-
-        // 🔥 하위 메시지 삭제 완료 후, 방 문서 삭제
+      if (updatedParticipants.length < 1) {
         await deleteDoc(roomRef);
-        console.log('방 삭제 완료');
       } else {
-        // 방을 유지하고 참여자 목록만 업데이트
         await updateDoc(roomRef, {participants: updatedParticipants});
       }
-
       setSettingsVisible(false);
-      // 목록 화면으로 이동
       router.replace('/(tabs)/chat');
     } catch (e) {
       console.error('Error leaving chat:', e);
@@ -283,25 +311,26 @@ export default function ChatDetailScreen() {
 
   const handleLeaveChat = () => {
     if (Platform.OS === 'web') {
-      // 웹: window.confirm 사용
-      if (window.confirm('정말로 이 채팅방을 나가시겠습니까?')) {
+      if (confirm('정말로 이 채팅방을 나가시겠습니까?')) {
         performLeaveChat();
       }
     } else {
-      // 앱: Alert 사용
       Alert.alert('채팅방 나가기', '정말로 이 채팅방을 나가시겠습니까?', [
         {text: '취소', style: 'cancel'},
-        {
-          text: '나가기',
-          style: 'destructive',
-          onPress: performLeaveChat,
-        },
+        {text: '나가기', style: 'destructive', onPress: performLeaveChat},
       ]);
     }
   };
 
   const renderItem = ({item}: {item: Message}) => {
     const isMe = item.sender === (user?.displayName || 'me') || item.sender === 'me';
+    if (item.sender === 'system') {
+      return (
+        <View style={styles.systemMessageRow}>
+          <Text style={styles.systemMessageText}>{item.text}</Text>
+        </View>
+      );
+    }
     return (
       <View style={[styles.messageRow, isMe ? styles.myRow : styles.otherRow]}>
         {!isMe && <Text style={styles.senderName}>{item.sender}</Text>}
@@ -314,14 +343,45 @@ export default function ChatDetailScreen() {
     );
   };
 
+  const renderInviteItem = ({item}: {item: UserInfo}) => (
+    <TouchableOpacity style={styles.inviteItem} onPress={() => handleInviteUser(item)}>
+      <View style={styles.avatarSmall} />
+      <View>
+        <Text style={styles.participantName}>{item.name}</Text>
+        <Text style={styles.participantEmail}>{item.email}</Text>
+      </View>
+      <IconSymbol name="plus" size={20} color="#006FFD" style={{marginLeft: 'auto'}} />
+    </TouchableOpacity>
+  );
+
+  // 채팅방 입장 시 읽음 처리
+  useEffect(() => {
+    if (!roomId || !user) return;
+    const resetUnreadCount = async () => {
+      try {
+        const roomRef = doc(db, 'chats', roomId);
+        await setDoc(
+          roomRef,
+          {
+            unreadCounts: {[user.uid]: 0},
+          },
+          {merge: true},
+        );
+      } catch (e) {
+        console.error('읽음 처리 실패:', e);
+      }
+    };
+    resetUnreadCount();
+  }, [roomId, user]);
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* 헤더 */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.iconButton}>
           <IconSymbol name="chevron.left" size={24} color="#006FFD" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{name || '채팅방'}</Text>
+        {/* 🔥 헤더 제목을 state 변수로 변경 */}
+        <Text style={styles.headerTitle}>{currentRoomName}</Text>
         <TouchableOpacity onPress={() => setSettingsVisible(true)} style={styles.iconButton}>
           <IconSymbol name="gear" size={24} color="#1F2024" />
         </TouchableOpacity>
@@ -341,7 +401,6 @@ export default function ChatDetailScreen() {
         />
       )}
 
-      {/* 입력창 */}
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}>
@@ -383,6 +442,23 @@ export default function ChatDetailScreen() {
               </TouchableOpacity>
             </View>
 
+            {/* 🔥 [추가됨] 채팅방 이름 변경 섹션 */}
+            <View style={styles.settingItemColumn}>
+              <Text style={[styles.settingText, {marginBottom: 8}]}>채팅방 이름</Text>
+              <View style={{flexDirection: 'row', gap: 8}}>
+                <TextInput
+                  style={styles.nameInput}
+                  value={editableName}
+                  onChangeText={setEditableName}
+                  placeholder="방 이름을 입력하세요"
+                />
+                <TouchableOpacity style={styles.saveButton} onPress={handleUpdateRoomName}>
+                  <Text style={styles.saveButtonText}>저장</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+            <View style={styles.divider} />
+
             <View style={styles.settingItem}>
               <Text style={styles.settingText}>채팅방 알림</Text>
               <Switch
@@ -395,6 +471,9 @@ export default function ChatDetailScreen() {
 
             <View style={styles.settingItem}>
               <Text style={styles.settingText}>참여자 ({participants.length}명)</Text>
+              <TouchableOpacity onPress={() => setInviteModalVisible(true)}>
+                <Text style={{color: '#006FFD', fontWeight: '600'}}>+ 초대하기</Text>
+              </TouchableOpacity>
             </View>
             <View style={styles.divider} />
 
@@ -424,6 +503,35 @@ export default function ChatDetailScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* 초대 모달 */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={inviteModalVisible}
+        onRequestClose={() => setInviteModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContainer, {maxHeight: '60%'}]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>대화 상대 초대</Text>
+              <TouchableOpacity onPress={() => setInviteModalVisible(false)}>
+                <IconSymbol name="xmark" size={24} color="#1F2024" />
+              </TouchableOpacity>
+            </View>
+
+            <FlatList
+              data={allUsers}
+              renderItem={renderInviteItem}
+              keyExtractor={item => item.uid}
+              ListEmptyComponent={
+                <Text style={{textAlign: 'center', marginTop: 20, color: '#888'}}>
+                  초대할 친구가 없습니다.
+                </Text>
+              }
+            />
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -446,6 +554,17 @@ const styles = StyleSheet.create({
   messageRow: {marginBottom: 4, maxWidth: '80%'},
   myRow: {alignSelf: 'flex-end', alignItems: 'flex-end'},
   otherRow: {alignSelf: 'flex-start', alignItems: 'flex-start'},
+
+  systemMessageRow: {alignItems: 'center', marginVertical: 10},
+  systemMessageText: {
+    fontSize: 12,
+    color: '#8F9098',
+    backgroundColor: '#F0F0F0',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+
   senderName: {fontSize: 12, color: '#71727A', fontWeight: '700', marginBottom: 4, marginLeft: 4},
   bubble: {paddingHorizontal: 16, paddingVertical: 12, borderRadius: 20},
   myBubble: {backgroundColor: '#006FFD', borderTopRightRadius: 4},
@@ -480,15 +599,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-
-  // 모달 스타일
   modalOverlay: {flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end'},
   modalContainer: {
     backgroundColor: 'white',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 20,
-    maxHeight: '80%',
+    maxHeight: '85%',
+    width: '100%',
   },
   modalHandle: {
     width: 40,
@@ -506,6 +624,27 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   modalTitle: {fontSize: 16, fontWeight: '700', color: '#1F2024'},
+
+  // 🔥 [추가된 스타일] 이름 변경 UI
+  settingItemColumn: {paddingVertical: 16},
+  nameInput: {
+    flex: 1,
+    height: 44,
+    backgroundColor: '#F8F9FE',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    fontSize: 16,
+  },
+  saveButton: {
+    width: 60,
+    height: 44,
+    backgroundColor: '#006FFD',
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  saveButtonText: {color: 'white', fontWeight: '600'},
+
   settingItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -536,4 +675,11 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   leaveButtonText: {color: 'white', fontWeight: '600', fontSize: 14},
+  inviteItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#F0F0F0',
+  },
 });
